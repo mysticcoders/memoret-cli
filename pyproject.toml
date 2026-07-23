@@ -1,0 +1,22 @@
+[project]
+name = "voicevault-cli"
+version = "0.1.0"
+description = "VoiceVault terminal receiver: pairs with the iOS app and ingests end-to-end encrypted voice captures into a local vault directory."
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.1",
+    "pynacl>=1.5",
+    "zeroconf>=0.132",
+    "qrcode>=7.4",
+    "textual>=0.80",
+]
+
+[project.scripts]
+voicevault = "voicevault_cli.main:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/voicevault_cli"]
