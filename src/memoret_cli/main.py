@@ -10,7 +10,7 @@ from .crypto import fingerprint
 @click.group()
 @click.version_option(__version__)
 def cli():
-    """VoiceVault terminal receiver: pair once with the iOS app, then
+    """Memoret terminal receiver: pair once with the iOS app, then
     captures arrive end-to-end encrypted and land in a local vault
     directory."""
 
@@ -18,7 +18,7 @@ def cli():
 @cli.command()
 @click.option(
     "--vault-dir",
-    default="~/VoiceVault",
+    default="~/Memoret",
     show_default=True,
     help="Directory notes and audio are written into.",
 )
@@ -36,7 +36,7 @@ def init(vault_dir: str, port: int, force: bool):
     click.echo(f"config written to {CONFIG_PATH}")
     click.echo(f"vault directory: {config.vault_path}")
     click.echo(f"key fingerprint: {fingerprint(config.public_key)}")
-    click.echo("run 'voicevault serve' and press p to show the pairing QR")
+    click.echo("run 'memoret serve' and press p to show the pairing QR")
 
 
 @cli.command()
@@ -66,13 +66,13 @@ def serve(headless: bool):
         except KeyboardInterrupt:
             receiver.stop()
         return
-    from .tui import VoiceVaultTUI
+    from .tui import MemoretTUI
 
-    VoiceVaultTUI(config).run()
+    MemoretTUI(config).run()
 
 
 def _require_config():
     config = load()
     if config is None:
-        raise click.ClickException("not initialized — run 'voicevault init' first")
+        raise click.ClickException("not initialized — run 'memoret init' first")
     return config

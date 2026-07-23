@@ -7,7 +7,7 @@ from pathlib import Path
 
 from nacl.public import PrivateKey
 
-CONFIG_DIR = Path.home() / ".voicevault"
+CONFIG_DIR = Path.home() / ".memoret"
 CONFIG_PATH = CONFIG_DIR / "config.json"
 DEFAULT_PORT = 41831
 

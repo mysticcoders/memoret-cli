@@ -13,7 +13,7 @@ from .crypto import MAGIC, fingerprint, open_sealed
 from .ingest import ingest_package
 
 MAX_BODY = 64 * 1024 * 1024
-SERVICE_TYPE = "_obsidianvoice._tcp.local."
+SERVICE_TYPE = "_memoret._tcp.local."
 
 LogFn = Callable[[str], None]
 
@@ -33,7 +33,7 @@ def _local_addresses() -> list[bytes]:
 
 
 class Receiver:
-    """The LAN receiver: an HTTP server speaking the VoiceVault transport
+    """The LAN receiver: an HTTP server speaking the Memoret transport
     contract plus a zeroconf advertisement, decrypting and ingesting
     captures as they arrive."""
 
@@ -64,7 +64,7 @@ class Receiver:
                 self._respond(
                     200,
                     {
-                        "service": "voicevault",
+                        "service": "memoret",
                         "version": __version__,
                         "fingerprint": fingerprint(receiver.config.public_key),
                     },
@@ -96,25 +96,39 @@ class Receiver:
 
         self.httpd = ThreadingHTTPServer(("0.0.0.0", self.config.port), Handler)
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
-
-        hostname = socket.gethostname().removesuffix(".local")
-        self.zeroconf = Zeroconf()
-        info = ServiceInfo(
-            SERVICE_TYPE,
-            f"VoiceVault CLI ({hostname}).{SERVICE_TYPE}",
-            addresses=_local_addresses(),
-            port=self.config.port,
-            properties={},
-        )
-        self.zeroconf.register_service(info)
+        threading.Thread(target=self._register_mdns, daemon=True).start()
         self.log(
-            f"listening on :{self.config.port}, advertising {SERVICE_TYPE} "
+            f"listening on :{self.config.port}, "
             f"fingerprint {fingerprint(self.config.public_key)}"
         )
 
+    def _register_mdns(self) -> None:
+        """Register the mDNS advertisement on a plain thread: zeroconf's
+        synchronous API deadlocks when created on a thread already running
+        an asyncio loop (the Textual UI thread)."""
+        try:
+            hostname = socket.gethostname().removesuffix(".local")
+            self.zeroconf = Zeroconf()
+            info = ServiceInfo(
+                SERVICE_TYPE,
+                f"Memoret CLI ({hostname}).{SERVICE_TYPE}",
+                addresses=_local_addresses(),
+                port=self.config.port,
+                properties={},
+            )
+            self.zeroconf.register_service(info)
+            self.log(f"advertising {SERVICE_TYPE[:-7]} via mDNS")
+        except Exception as err:
+            self.log(f"mDNS registration failed: {err}")
+
     def stop(self) -> None:
         if self.zeroconf is not None:
-            self.zeroconf.unregister_all_services()
-            self.zeroconf.close()
+            try:
+                self.zeroconf.unregister_all_services()
+                self.zeroconf.close()
+            except Exception:
+                pass
+            self.zeroconf = None
         if self.httpd is not None:
             self.httpd.shutdown()
+            self.httpd = None
