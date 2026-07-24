@@ -1,0 +1,38 @@
+name: Publish to PyPI
+
+# Publishes memoret-cli to PyPI via Trusted Publishing (OIDC — no API token
+# stored in the repo). Trigger by pushing a tag like `v0.1.1`; keep the tag
+# version in sync with pyproject.toml's [project].version.
+#
+# One-time setup on PyPI (https://pypi.org/manage/project/memoret-cli/settings/publishing/):
+#   Add a trusted publisher with:
+#     Owner:            mysticcoders
+#     Repository:       memoret-cli
+#     Workflow name:    publish.yml
+#     Environment:      pypi
+# Then create a GitHub environment named `pypi` in repo settings.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # required for Trusted Publishing
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build sdist + wheel
+        run: uv build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

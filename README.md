@@ -20,10 +20,10 @@ uv tool install memoret-cli
 pipx install memoret-cli
 ```
 
-Bleeding edge, straight from the monorepo:
+Bleeding edge, straight from source:
 
 ```bash
-uv tool install "git+https://github.com/mysticcoders/memoret.git#subdirectory=cli"
+uv tool install "git+https://github.com/mysticcoders/memoret-cli.git"
 ```
 
 ## Use
@@ -45,4 +45,4 @@ advertises over Bonjour (`_memoret._tcp`) on port `41831` by default.
 - The receiver authenticates uploads with a bearer token established at pairing.
 - See the protocol docs at <https://developer.memoret.app>.
 
-MIT licensed. Part of the [mysticcoders/memoret](https://github.com/mysticcoders/memoret) monorepo.
+MIT licensed. Issues and pull requests: [mysticcoders/memoret-cli](https://github.com/mysticcoders/memoret-cli).
