@@ -2,7 +2,24 @@
 name = "memoret-cli"
 version = "0.1.0"
 description = "Memoret terminal receiver: pairs with the iOS app and ingests end-to-end encrypted voice captures into a local vault directory."
+readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Mystic Coders, LLC", email = "andrew@mysticcoders.com" }]
+keywords = ["obsidian", "voice", "transcription", "end-to-end-encryption", "bonjour", "memoret"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio :: Capture/Recording",
+    "Topic :: Text Processing",
+]
 dependencies = [
     "click>=8.1",
     "pynacl>=1.5",
@@ -10,6 +27,12 @@ dependencies = [
     "qrcode>=7.4",
     "textual>=0.80",
 ]
+
+[project.urls]
+Homepage = "https://memoret.app"
+Documentation = "https://developer.memoret.app"
+Repository = "https://github.com/mysticcoders/memoret"
+Issues = "https://github.com/mysticcoders/memoret/issues"
 
 [project.scripts]
 memoret = "memoret_cli.main:cli"
