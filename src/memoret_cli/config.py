@@ -1,5 +1,6 @@
 import base64
 import json
+import os
 import secrets
 import socket
 from dataclasses import dataclass
@@ -39,6 +40,23 @@ class Config:
         )
 
 
+def _write_private(path: Path, text: str) -> None:
+    """Write a file holding key material without it ever being observable at
+    looser than 0600: the temp file is created with O_EXCL at that mode
+    regardless of umask, then atomically renamed over the target."""
+    temp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, path)
+    except BaseException:
+        temp.unlink(missing_ok=True)
+        raise
+
+
 def create(vault_dir: str, port: int) -> Config:
     """Generate a fresh keypair, auth token, and config file with owner-only
     permissions."""
@@ -51,8 +69,7 @@ def create(vault_dir: str, port: int) -> Config:
         vault_dir=vault_dir,
     )
     CONFIG_DIR.mkdir(mode=0o700, exist_ok=True)
-    CONFIG_PATH.write_text(json.dumps(config.__dict__, indent=2) + "\n")
-    CONFIG_PATH.chmod(0o600)
+    _write_private(CONFIG_PATH, json.dumps(config.__dict__, indent=2) + "\n")
     return config
 
 
