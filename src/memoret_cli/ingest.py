@@ -4,6 +4,8 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from .manifest import validate_manifest
+
 INGESTED_INDEX = "ingested.json"
 
 # Per-entry uncompressed size ceilings. The 64 MB body cap bounds only the
@@ -38,15 +40,6 @@ class IngestResult:
     audio_path: str | None = None
 
 
-def _safe(path: str) -> bool:
-    """Reject vault-relative paths that could escape the vault or write
-    into hidden directories."""
-    if not path or path.startswith("/") or "\\" in path:
-        return False
-    parts = path.split("/")
-    return all(p and p not in (".", "..") and not p.startswith(".") for p in parts)
-
-
 def _load_index(vault: Path) -> set[str]:
     index = vault / INGESTED_INDEX
     if index.exists():
@@ -69,15 +62,11 @@ def ingest_package(package: bytes, vault: Path) -> IngestResult:
     for required in ("manifest.json", "transcript.md", "audio.m4a"):
         if required not in names:
             raise ValueError(f"package missing {required}")
-    manifest = json.loads(
-        _read_capped(archive, "manifest.json", MAX_ENTRY_BYTES["manifest.json"]))
-    capture_id = manifest.get("capture_id", "")
-    if not capture_id:
-        raise ValueError("manifest missing capture_id")
-    note_rel = manifest.get("vault_note_path", "")
-    audio_rel = manifest.get("attachment_path", "")
-    if not _safe(note_rel) or not _safe(audio_rel):
-        raise ValueError("manifest contains unsafe vault paths")
+    manifest = validate_manifest(json.loads(
+        _read_capped(archive, "manifest.json", MAX_ENTRY_BYTES["manifest.json"])))
+    capture_id = manifest["capture_id"]
+    note_rel = manifest["vault_note_path"]
+    audio_rel = manifest["attachment_path"]
 
     seen = _load_index(vault)
     if capture_id in seen:
