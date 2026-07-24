@@ -6,6 +6,29 @@ from pathlib import Path
 
 INGESTED_INDEX = "ingested.json"
 
+# Per-entry uncompressed size ceilings. The 64 MB body cap bounds only the
+# sealed (compressed) blob; without these, a decrypted entry could inflate
+# to gigabytes and exhaust memory or disk (a zip bomb).
+MAX_ENTRY_BYTES = {
+    "manifest.json": 1 * 1024 * 1024,
+    "transcript.md": 10 * 1024 * 1024,
+    "audio.m4a": 128 * 1024 * 1024,
+}
+MAX_ENTRIES = 8
+
+
+def _read_capped(archive: zipfile.ZipFile, name: str, cap: int) -> bytes:
+    """Reads a zip entry, rejecting it if its declared or actual
+    uncompressed size exceeds the cap. The declared-size check is cheap;
+    the bounded read defends against a header that understates the size."""
+    if archive.getinfo(name).file_size > cap:
+        raise ValueError(f"package entry {name} exceeds size limit")
+    with archive.open(name) as member:
+        data = member.read(cap + 1)
+    if len(data) > cap:
+        raise ValueError(f"package entry {name} exceeds size limit")
+    return data
+
 
 @dataclass
 class IngestResult:
@@ -40,11 +63,14 @@ def ingest_package(package: bytes, vault: Path) -> IngestResult:
     their manifest paths, deduplicating by capture id and suffixing on
     collisions — the same contract the Obsidian plugin implements."""
     archive = zipfile.ZipFile(io.BytesIO(package))
+    if len(archive.infolist()) > MAX_ENTRIES:
+        raise ValueError("package has too many entries")
     names = set(archive.namelist())
     for required in ("manifest.json", "transcript.md", "audio.m4a"):
         if required not in names:
             raise ValueError(f"package missing {required}")
-    manifest = json.loads(archive.read("manifest.json"))
+    manifest = json.loads(
+        _read_capped(archive, "manifest.json", MAX_ENTRY_BYTES["manifest.json"]))
     capture_id = manifest.get("capture_id", "")
     if not capture_id:
         raise ValueError("manifest missing capture_id")
@@ -66,8 +92,10 @@ def ingest_package(package: bytes, vault: Path) -> IngestResult:
         audio_path = audio_path.with_name(f"{audio_path.stem}-{short}{audio_path.suffix}")
     note_path.parent.mkdir(parents=True, exist_ok=True)
     audio_path.parent.mkdir(parents=True, exist_ok=True)
-    audio_path.write_bytes(archive.read("audio.m4a"))
-    note_path.write_text(archive.read("transcript.md").decode("utf-8"))
+    audio_path.write_bytes(
+        _read_capped(archive, "audio.m4a", MAX_ENTRY_BYTES["audio.m4a"]))
+    note_path.write_text(
+        _read_capped(archive, "transcript.md", MAX_ENTRY_BYTES["transcript.md"]).decode("utf-8"))
 
     seen.add(capture_id)
     _save_index(vault, seen)
