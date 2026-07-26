@@ -12,6 +12,7 @@ from . import __version__
 from .config import Config
 from .crypto import MAGIC, fingerprint, open_sealed
 from .ingest import ingest_package
+from .manifest import CAPTURE_KINDS
 
 MAX_BODY = 64 * 1024 * 1024
 SERVICE_TYPE = "_memoret._tcp.local."
@@ -136,6 +137,13 @@ class Receiver:
                         "service": "memoret",
                         "version": __version__,
                         "fingerprint": fingerprint(receiver.config.public_key),
+                        # Comma-separated rather than a JSON array on
+                        # purpose: shipped senders decode /ping as a flat
+                        # string map, and an array value makes that decode
+                        # throw, which would look like the receiver had
+                        # vanished. Senders that do not know the field read
+                        # this receiver as voice-only.
+                        "capabilities": ",".join(CAPTURE_KINDS),
                     },
                 )
 

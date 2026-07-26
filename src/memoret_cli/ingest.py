@@ -4,7 +4,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from .manifest import validate_manifest
+from .manifest import manifest_kind, validate_manifest
 
 INGESTED_INDEX = "ingested.json"
 
@@ -59,30 +59,43 @@ def ingest_package(package: bytes, vault: Path) -> IngestResult:
     if len(archive.infolist()) > MAX_ENTRIES:
         raise ValueError("package has too many entries")
     names = set(archive.namelist())
-    for required in ("manifest.json", "transcript.md", "audio.m4a"):
+    for required in ("manifest.json", "transcript.md"):
         if required not in names:
             raise ValueError(f"package missing {required}")
     manifest = validate_manifest(json.loads(
         _read_capped(archive, "manifest.json", MAX_ENTRY_BYTES["manifest.json"])))
     capture_id = manifest["capture_id"]
     note_rel = manifest["vault_note_path"]
-    audio_rel = manifest["attachment_path"]
+
+    # Audio belongs to voice captures only, and the manifest validator has
+    # already checked that the audio-bearing fields match the kind.
+    kind = manifest_kind(manifest)
+    has_audio = "audio.m4a" in names
+    if kind == "voice" and not has_audio:
+        raise ValueError("package missing audio.m4a")
+    if kind != "voice" and has_audio:
+        raise ValueError(f"package for a {kind} capture must not carry audio.m4a")
 
     seen = _load_index(vault)
     if capture_id in seen:
         return IngestResult(capture_id=capture_id, duplicate=True)
 
-    note_path = vault / note_rel
-    audio_path = vault / audio_rel
     short = capture_id[:8]
+    note_path = vault / note_rel
     if note_path.exists():
         note_path = note_path.with_name(f"{note_path.stem}-{short}{note_path.suffix}")
-    if audio_path.exists():
-        audio_path = audio_path.with_name(f"{audio_path.stem}-{short}{audio_path.suffix}")
     note_path.parent.mkdir(parents=True, exist_ok=True)
-    audio_path.parent.mkdir(parents=True, exist_ok=True)
-    audio_path.write_bytes(
-        _read_capped(archive, "audio.m4a", MAX_ENTRY_BYTES["audio.m4a"]))
+
+    audio_path: Path | None = None
+    if has_audio:
+        audio_path = vault / manifest["attachment_path"]
+        if audio_path.exists():
+            audio_path = audio_path.with_name(
+                f"{audio_path.stem}-{short}{audio_path.suffix}")
+        audio_path.parent.mkdir(parents=True, exist_ok=True)
+        audio_path.write_bytes(
+            _read_capped(archive, "audio.m4a", MAX_ENTRY_BYTES["audio.m4a"]))
+
     note_path.write_text(
         _read_capped(archive, "transcript.md", MAX_ENTRY_BYTES["transcript.md"]).decode("utf-8"))
 
@@ -92,5 +105,5 @@ def ingest_package(package: bytes, vault: Path) -> IngestResult:
         capture_id=capture_id,
         duplicate=False,
         note_path=str(note_path.relative_to(vault)),
-        audio_path=str(audio_path.relative_to(vault)),
+        audio_path=str(audio_path.relative_to(vault)) if audio_path else None,
     )
