@@ -18,6 +18,54 @@ MAX_ENTRY_BYTES = {
 }
 MAX_ENTRIES = 8
 
+# How many suffixed names to try before giving up. Reaching this means
+# something is wrong with the vault rather than with the capture, and
+# failing loudly beats spinning forever.
+MAX_COLLISION_ATTEMPTS = 1000
+
+
+def _free_path(path: Path, capture_id: str) -> Path:
+    """Pick a destination nothing already occupies.
+
+    The first fallback carries the whole capture id, not a prefix of it:
+    needing a fallback at all means two captures already want one name, and
+    truncating the id is what makes a second clash likelier. The counter
+    after it guarantees the search ends. The previous version returned its
+    single alternate unchecked, which silently overwrote whatever was
+    already there."""
+    if not path.exists():
+        return path
+    candidate = path.with_name(f"{path.stem}-{capture_id}{path.suffix}")
+    if not candidate.exists():
+        return candidate
+    for n in range(2, MAX_COLLISION_ATTEMPTS):
+        candidate = path.with_name(f"{path.stem}-{capture_id}-{n}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+    raise ValueError(f"no free destination for {path}")
+
+
+def rewrite_audio_embed(transcript: str, from_path: str, to_path: str) -> str:
+    """Point the note's audio embed at where the attachment actually landed.
+
+    The sender writes the embed from its own manifest path, but a collision
+    can rename the file underneath it, leaving the note linking to
+    something that is not there.
+
+    The whole line is matched rather than the path alone, so a transcript
+    that quotes the same text is left intact, and only the first such line
+    is rewritten — the contract emits exactly one, immediately after the
+    frontmatter."""
+    if from_path == to_path:
+        return transcript
+    lines = transcript.split("\n")
+    target = f"![[{from_path}]]"
+    for index, line in enumerate(lines):
+        if line == target:
+            lines[index] = f"![[{to_path}]]"
+            break
+    return "\n".join(lines)
+
 
 def _read_capped(archive: zipfile.ZipFile, name: str, cap: int) -> bytes:
     """Reads a zip entry, rejecting it if its declared or actual
@@ -58,7 +106,13 @@ def ingest_package(package: bytes, vault: Path) -> IngestResult:
     archive = zipfile.ZipFile(io.BytesIO(package))
     if len(archive.infolist()) > MAX_ENTRIES:
         raise ValueError("package has too many entries")
-    names = set(archive.namelist())
+    listed = archive.namelist()
+    # Collapsing straight to a set hid a package carrying the same name
+    # twice, where which copy gets read is a property of the zip reader
+    # rather than of the contract.
+    if len(listed) != len(set(listed)):
+        raise ValueError("package has duplicate entries")
+    names = set(listed)
     for required in ("manifest.json", "transcript.md"):
         if required not in names:
             raise ValueError(f"package missing {required}")
@@ -80,24 +134,28 @@ def ingest_package(package: bytes, vault: Path) -> IngestResult:
     if capture_id in seen:
         return IngestResult(capture_id=capture_id, duplicate=True)
 
-    short = capture_id[:8]
-    note_path = vault / note_rel
-    if note_path.exists():
-        note_path = note_path.with_name(f"{note_path.stem}-{short}{note_path.suffix}")
+    note_path = _free_path(vault / note_rel, capture_id)
     note_path.parent.mkdir(parents=True, exist_ok=True)
 
     audio_path: Path | None = None
     if has_audio:
-        audio_path = vault / manifest["attachment_path"]
-        if audio_path.exists():
-            audio_path = audio_path.with_name(
-                f"{audio_path.stem}-{short}{audio_path.suffix}")
+        audio_path = _free_path(vault / manifest["attachment_path"], capture_id)
         audio_path.parent.mkdir(parents=True, exist_ok=True)
         audio_path.write_bytes(
             _read_capped(archive, "audio.m4a", MAX_ENTRY_BYTES["audio.m4a"]))
 
-    note_path.write_text(
-        _read_capped(archive, "transcript.md", MAX_ENTRY_BYTES["transcript.md"]).decode("utf-8"))
+    transcript = _read_capped(
+        archive, "transcript.md", MAX_ENTRY_BYTES["transcript.md"]).decode("utf-8")
+    # The embed the sender wrote names its own manifest path, which is only
+    # where the audio ends up when nothing renamed it. Written after the
+    # destination is settled, never before.
+    if audio_path is not None:
+        transcript = rewrite_audio_embed(
+            transcript,
+            manifest["attachment_path"],
+            str(audio_path.relative_to(vault)),
+        )
+    note_path.write_text(transcript)
 
     seen.add(capture_id)
     _save_index(vault, seen)

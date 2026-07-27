@@ -1,0 +1,29 @@
+name: CI
+
+# Only a tag-triggered publish workflow existed, so no pull request in this
+# repository had ever been checked.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor declared in requires-python, and current.
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Test
+        run: uv run --group dev --python ${{ matrix.python-version }} pytest -q
