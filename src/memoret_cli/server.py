@@ -11,7 +11,7 @@ from zeroconf import ServiceInfo, Zeroconf
 from . import __version__
 from .config import Config
 from .crypto import MAGIC, fingerprint, open_sealed
-from .ingest import ingest_package
+from .ingest import PackageRejected, ingest_package
 from .manifest import CAPTURE_KINDS
 
 MAX_BODY = 64 * 1024 * 1024
@@ -167,12 +167,19 @@ class Receiver:
                     return
                 if not blob.startswith(MAGIC):
                     return self._respond(400, {"error": "not a VVSB sealed blob"})
+                # The detail stays in the local log. What goes back on the
+                # wire is a fixed code: an exception's text is written for
+                # whoever is debugging, and can name paths or repeat the
+                # contents of a rejected package.
                 try:
                     package = open_sealed(blob, receiver.config.private_key)
                     result = ingest_package(package, receiver.config.vault_path)
+                except PackageRejected as err:
+                    receiver.log(f"ingest rejected ({err.code}): {err}")
+                    return self._respond(422, {"error": err.code})
                 except Exception as err:
-                    receiver.log(f"ingest failed: {err}")
-                    return self._respond(422, {"error": str(err)})
+                    receiver.log(f"ingest failed: {err!r}")
+                    return self._respond(422, {"error": "unreadable_package"})
                 if result.duplicate:
                     receiver.log(f"duplicate capture {result.capture_id} ignored")
                 else:
@@ -216,4 +223,8 @@ class Receiver:
             self.zeroconf = None
         if self.httpd is not None:
             self.httpd.shutdown()
+            # shutdown() only stops serve_forever; without this the listening
+            # socket stays open, and restarting the receiver in the same
+            # process fails to bind.
+            self.httpd.server_close()
             self.httpd = None

@@ -1,12 +1,53 @@
 import io
 import json
+import os
+import threading
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from .manifest import manifest_kind, validate_manifest
 
-INGESTED_INDEX = "ingested.json"
+# Receiver bookkeeping lives beside the vault's contents rather than in it.
+# The old location put a machine-readable index in the middle of the user's
+# notes, where it shows up in searches and file listings as if it were one.
+METADATA_DIR = ".memoret"
+INGESTED_INDEX = f"{METADATA_DIR}/ingested.json"
+LEGACY_INGESTED_INDEX = "ingested.json"
+
+
+class PackageRejected(ValueError):
+    """A capture that will never ingest, however many times it is sent.
+
+    Carries a stable code for the sender, so the wire response does not
+    become a channel for whatever text an exception happened to hold."""
+
+    def __init__(self, code: str, detail: str):
+        super().__init__(detail)
+        self.code = code
+
+
+# One lock per vault, so the read-modify-write of the index cannot interleave
+# with another request's. The server is threaded, and without this two
+# captures arriving together both read the old index and the second write
+# erased the first — and two copies of one capture could both pass the
+# duplicate check.
+#
+# This covers threads in this process, which is what the threaded server
+# creates. Two `memoret serve` processes pointed at one vault would still
+# race; they cannot share a port, so that needs deliberate misconfiguration.
+_vault_locks: dict[Path, threading.Lock] = {}
+_vault_locks_guard = threading.Lock()
+
+
+def _vault_lock(vault: Path) -> threading.Lock:
+    key = vault.resolve()
+    with _vault_locks_guard:
+        lock = _vault_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _vault_locks[key] = lock
+        return lock
 
 # Per-entry uncompressed size ceilings. The 64 MB body cap bounds only the
 # sealed (compressed) blob; without these, a decrypted entry could inflate
@@ -89,14 +130,39 @@ class IngestResult:
 
 
 def _load_index(vault: Path) -> set[str]:
+    """Read the dedupe index, adopting one left at the old vault-root path.
+
+    Losing this set would not corrupt anything, but it would let every
+    capture already delivered arrive a second time on the next redelivery,
+    so the old file is read rather than ignored."""
     index = vault / INGESTED_INDEX
     if index.exists():
         return set(json.loads(index.read_text()))
+    legacy = vault / LEGACY_INGESTED_INDEX
+    if legacy.exists():
+        return set(json.loads(legacy.read_text()))
     return set()
 
 
 def _save_index(vault: Path, ids: set[str]) -> None:
-    (vault / INGESTED_INDEX).write_text(json.dumps(sorted(ids)) + "\n")
+    """Replace the index atomically, so an interruption mid-write leaves the
+    previous index intact rather than a truncated file that reads as no
+    captures having ever arrived."""
+    index = vault / INGESTED_INDEX
+    index.parent.mkdir(parents=True, exist_ok=True)
+    temp = index.with_name(f"{index.name}.{os.getpid()}.tmp")
+    try:
+        with open(temp, "w") as handle:
+            handle.write(json.dumps(sorted(ids)) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, index)
+    except BaseException:
+        temp.unlink(missing_ok=True)
+        raise
+    # Only once the new index is in place, so a crash between the two leaves
+    # the old file to be adopted rather than nothing at all.
+    (vault / LEGACY_INGESTED_INDEX).unlink(missing_ok=True)
 
 
 def ingest_package(package: bytes, vault: Path) -> IngestResult:
@@ -105,19 +171,24 @@ def ingest_package(package: bytes, vault: Path) -> IngestResult:
     collisions — the same contract the Obsidian plugin implements."""
     archive = zipfile.ZipFile(io.BytesIO(package))
     if len(archive.infolist()) > MAX_ENTRIES:
-        raise ValueError("package has too many entries")
+        raise PackageRejected("too_many_entries", "package has too many entries")
     listed = archive.namelist()
     # Collapsing straight to a set hid a package carrying the same name
     # twice, where which copy gets read is a property of the zip reader
     # rather than of the contract.
     if len(listed) != len(set(listed)):
-        raise ValueError("package has duplicate entries")
+        raise PackageRejected("duplicate_entries", "package has duplicate entries")
     names = set(listed)
     for required in ("manifest.json", "transcript.md"):
         if required not in names:
-            raise ValueError(f"package missing {required}")
-    manifest = validate_manifest(json.loads(
-        _read_capped(archive, "manifest.json", MAX_ENTRY_BYTES["manifest.json"])))
+            raise PackageRejected("missing_entry", f"package missing {required}")
+    try:
+        manifest = validate_manifest(json.loads(
+            _read_capped(archive, "manifest.json", MAX_ENTRY_BYTES["manifest.json"])))
+    except PackageRejected:
+        raise
+    except Exception as err:
+        raise PackageRejected("invalid_manifest", str(err)) from err
     capture_id = manifest["capture_id"]
     note_rel = manifest["vault_note_path"]
 
@@ -126,39 +197,58 @@ def ingest_package(package: bytes, vault: Path) -> IngestResult:
     kind = manifest_kind(manifest)
     has_audio = "audio.m4a" in names
     if kind == "voice" and not has_audio:
-        raise ValueError("package missing audio.m4a")
+        raise PackageRejected("missing_entry", "package missing audio.m4a")
     if kind != "voice" and has_audio:
-        raise ValueError(f"package for a {kind} capture must not carry audio.m4a")
+        raise PackageRejected(
+            "kind_mismatch", f"package for a {kind} capture must not carry audio.m4a")
 
-    seen = _load_index(vault)
-    if capture_id in seen:
-        return IngestResult(capture_id=capture_id, duplicate=True)
+    # Checking for a duplicate, reserving names, writing, and recording the
+    # id are one operation. Interleaved, two captures arriving together both
+    # read the old index and the second write erased the first, and two
+    # copies of one capture could both get past the duplicate check.
+    with _vault_lock(vault):
+        seen = _load_index(vault)
+        if capture_id in seen:
+            return IngestResult(capture_id=capture_id, duplicate=True)
 
-    note_path = _free_path(vault / note_rel, capture_id)
-    note_path.parent.mkdir(parents=True, exist_ok=True)
+        note_path = _free_path(vault / note_rel, capture_id)
+        note_path.parent.mkdir(parents=True, exist_ok=True)
 
-    audio_path: Path | None = None
-    if has_audio:
-        audio_path = _free_path(vault / manifest["attachment_path"], capture_id)
-        audio_path.parent.mkdir(parents=True, exist_ok=True)
-        audio_path.write_bytes(
-            _read_capped(archive, "audio.m4a", MAX_ENTRY_BYTES["audio.m4a"]))
+        audio_path: Path | None = None
+        written: list[Path] = []
+        try:
+            if has_audio:
+                audio_path = _free_path(vault / manifest["attachment_path"], capture_id)
+                audio_path.parent.mkdir(parents=True, exist_ok=True)
+                audio_path.write_bytes(
+                    _read_capped(archive, "audio.m4a", MAX_ENTRY_BYTES["audio.m4a"]))
+                written.append(audio_path)
 
-    transcript = _read_capped(
-        archive, "transcript.md", MAX_ENTRY_BYTES["transcript.md"]).decode("utf-8")
-    # The embed the sender wrote names its own manifest path, which is only
-    # where the audio ends up when nothing renamed it. Written after the
-    # destination is settled, never before.
-    if audio_path is not None:
-        transcript = rewrite_audio_embed(
-            transcript,
-            manifest["attachment_path"],
-            str(audio_path.relative_to(vault)),
-        )
-    note_path.write_text(transcript)
+            transcript = _read_capped(
+                archive, "transcript.md", MAX_ENTRY_BYTES["transcript.md"]).decode("utf-8")
+            # The embed the sender wrote names its own manifest path, which
+            # is only where the audio ends up when nothing renamed it.
+            # Written after the destination is settled, never before.
+            if audio_path is not None:
+                transcript = rewrite_audio_embed(
+                    transcript,
+                    manifest["attachment_path"],
+                    str(audio_path.relative_to(vault)),
+                )
+            note_path.write_text(transcript)
+            written.append(note_path)
 
-    seen.add(capture_id)
-    _save_index(vault, seen)
+            seen.add(capture_id)
+            _save_index(vault, seen)
+        except BaseException:
+            # Audio is written before the note, so a failure between them
+            # used to leave the recording behind with nothing referring to
+            # it — and the redelivery would route around the orphan into a
+            # collision name rather than replacing it.
+            for path in written:
+                path.unlink(missing_ok=True)
+            raise
+
     return IngestResult(
         capture_id=capture_id,
         duplicate=False,

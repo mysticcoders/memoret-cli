@@ -38,6 +38,16 @@ memoret serve --headless     # run without the TUI, logging to stdout (good for 
 Config lives in `~/.memoret/config.json` (created `0600`); the LAN receiver
 advertises over Bonjour (`_memoret._tcp`) on port `41831` by default.
 
+Inside the vault, notes and audio go where each capture's manifest asks, and
+the receiver's own bookkeeping stays out of the way in `.memoret/`. Earlier
+versions wrote `ingested.json` into the vault root, where it turned up in
+searches and file listings alongside real notes; an index found there is
+adopted and retired automatically, so nothing is redelivered.
+
+`memoret serve --headless` stops on SIGTERM as well as Ctrl-C, withdrawing
+the Bonjour advertisement on the way out, so it can be run under a service
+manager.
+
 ## Security
 
 - Payloads are end-to-end encrypted; the LAN transport is plaintext HTTP by
