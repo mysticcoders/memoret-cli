@@ -37,6 +37,12 @@ Issues = "https://github.com/mysticcoders/memoret-cli/issues"
 [project.scripts]
 memoret = "memoret_cli.main:cli"
 
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
