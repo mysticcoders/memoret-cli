@@ -29,9 +29,29 @@ def is_safe_vault_path(path: Any) -> bool:
     )
 
 
-def _is_iso8601(value: str) -> bool:
+RFC3339 = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$"
+)
+
+
+def _is_rfc3339(value: str) -> bool:
+    """A date and a time with an offset, which is what every sender emits.
+
+    This used to be datetime.fromisoformat, which accepts a bare date and a
+    space-separated time. The Swift receiver accepted neither, so the two
+    disagreed about what a valid capture was — see the shared corpus at
+    github.com/mysticcoders/memoret-contract-fixtures. The offset is
+    required because a local time is ambiguous and nothing downstream can
+    recover which one was meant.
+
+    The shape is checked before the value, since a regex alone would admit
+    February 30th."""
+    if not RFC3339.match(value):
+        return False
     try:
-        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        # Python parses the offset itself, and rejects an impossible day
+        # rather than rolling it forward the way some libraries do.
+        datetime.fromisoformat(value.replace("Z", "+00:00").replace("z", "+00:00"))
     except ValueError:
         return False
     return True
@@ -53,8 +73,8 @@ def validate_manifest(raw: Any) -> dict:
     if not isinstance(capture_id, str) or not UUID_V4.match(capture_id):
         raise ValueError("manifest: capture_id must be a UUID v4")
     created_at = raw.get("created_at")
-    if not isinstance(created_at, str) or not _is_iso8601(created_at):
-        raise ValueError("manifest: created_at must be an ISO-8601 timestamp")
+    if not isinstance(created_at, str) or not _is_rfc3339(created_at):
+        raise ValueError("manifest: created_at must be an RFC 3339 timestamp")
     device_id = raw.get("device_id")
     if not isinstance(device_id, str) or not device_id:
         raise ValueError("manifest: device_id must be a non-empty string")
@@ -74,6 +94,12 @@ def validate_manifest(raw: Any) -> dict:
     # them, a link capture none. A half-populated manifest would leave the
     # receiver guessing whether to expect an audio entry.
     if kind == "voice":
+        # Absence and unsafety are reported apart. Telling someone their
+        # attachment_path is unsafe when they never sent one points at path
+        # validation instead of at the missing field.
+        for field in AUDIO_FIELDS:
+            if raw.get(field) is None:
+                raise ValueError(f"manifest: a voice capture must carry {field}")
         if not is_safe_vault_path(raw.get("attachment_path")):
             raise ValueError(
                 "manifest: attachment_path is not a safe vault-relative path")
