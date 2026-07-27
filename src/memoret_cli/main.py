@@ -1,9 +1,10 @@
-import time
+import signal
+import threading
 
 import click
 
 from . import __version__
-from .config import DEFAULT_PORT, CONFIG_PATH, create, load
+from .config import DEFAULT_PORT, CONFIG_PATH, InvalidConfig, create, load
 from .crypto import fingerprint
 
 
@@ -26,7 +27,10 @@ def cli():
 @click.option("--force", is_flag=True, help="Overwrite an existing config and keypair.")
 def init(vault_dir: str, port: int, force: bool):
     """Generate the receiver keypair, auth token, and config."""
-    if load() is not None and not force:
+    # Whether the file is there, not whether it parses: a config too broken
+    # to load is still one worth refusing to clobber, and --force is the
+    # escape hatch for exactly that case.
+    if CONFIG_PATH.exists() and not force:
         raise click.ClickException(
             f"already initialized ({CONFIG_PATH}); use --force to regenerate. "
             "Regenerating unpairs every device."
@@ -60,10 +64,22 @@ def serve(headless: bool):
 
         receiver = Receiver(config, click.echo)
         receiver.start()
+        # A headless receiver is what a service manager runs, and those stop
+        # things with SIGTERM. Without this it was killed outright, leaving
+        # the mDNS advertisement to time out rather than be withdrawn.
+        stopping = threading.Event()
+
+        def request_stop(signum, _frame) -> None:
+            click.echo(f"received signal {signum}, shutting down")
+            stopping.set()
+
+        for received in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(received, request_stop)
         try:
-            while True:
-                time.sleep(3600)
+            stopping.wait()
         except KeyboardInterrupt:
+            pass
+        finally:
             receiver.stop()
         return
     from .tui import MemoretTUI
@@ -72,7 +88,13 @@ def serve(headless: bool):
 
 
 def _require_config():
-    config = load()
+    # A config that exists but is unusable is a different problem from one
+    # that is absent, and telling the user which field is wrong beats a
+    # traceback or a decryption failure much later.
+    try:
+        config = load()
+    except InvalidConfig as err:
+        raise click.ClickException(f"{CONFIG_PATH} is unusable: {err}") from err
     if config is None:
         raise click.ClickException("not initialized — run 'memoret init' first")
     return config
