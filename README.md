@@ -48,6 +48,18 @@ adopted and retired automatically, so nothing is redelivered.
 the Bonjour advertisement on the way out, so it can be run under a service
 manager.
 
+## Development
+
+```bash
+scripts/fetch-fixtures.sh          # pull the shared conformance corpus
+uv run --group dev pytest          # run the suite
+```
+
+The manifest rules are pinned by a corpus shared with the other receivers,
+at [memoret-contract-fixtures](https://github.com/mysticcoders/memoret-contract-fixtures).
+It is fetched rather than vendored, so all four implementations read one
+copy instead of drifting apart with their own.
+
 ## Security
 
 - Payloads are end-to-end encrypted; the LAN transport is plaintext HTTP by
