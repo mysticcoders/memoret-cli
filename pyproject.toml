@@ -1,6 +1,6 @@
 [project]
 name = "memoret-cli"
-version = "0.1.3"
+version = "0.2.0"
 description = "Memoret terminal receiver: pairs with the iOS app and ingests end-to-end encrypted voice captures into a local vault directory."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -22,7 +22,7 @@ classifiers = [
 ]
 dependencies = [
     "click>=8.1",
-    "pynacl>=1.5",
+    "pyhpke>=0.6",
     "zeroconf>=0.132",
     "qrcode>=7.4",
     "textual>=0.80",

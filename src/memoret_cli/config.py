@@ -6,7 +6,7 @@ import socket
 from dataclasses import dataclass
 from pathlib import Path
 
-from nacl.public import PrivateKey
+from .crypto import generate_keypair
 
 CONFIG_DIR = Path.home() / ".memoret"
 CONFIG_PATH = CONFIG_DIR / "config.json"
@@ -60,10 +60,10 @@ def _write_private(path: Path, text: str) -> None:
 def create(vault_dir: str, port: int) -> Config:
     """Generate a fresh keypair, auth token, and config file with owner-only
     permissions."""
-    key = PrivateKey.generate()
+    public_key, private_key = generate_keypair()
     config = Config(
-        public_key=base64.b64encode(bytes(key.public_key)).decode(),
-        private_key=base64.b64encode(bytes(key)).decode(),
+        public_key=public_key,
+        private_key=private_key,
         auth_token=secrets.token_urlsafe(32),
         port=port,
         vault_dir=vault_dir,

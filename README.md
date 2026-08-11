@@ -7,7 +7,8 @@ receiver: it holds the private key, listens on your LAN, and writes decrypted
 notes and audio into a plain vault directory.
 
 The private key never leaves the machine running this tool. Captures are sealed
-with libsodium `crypto_box_seal` on the phone and only ever opened here.
+on the phone with HPKE (RFC 9180, `DHKEM(X25519, HKDF-SHA256) / HKDF-SHA256 /
+ChaCha20-Poly1305`) and only ever opened here.
 
 ## Install
 
