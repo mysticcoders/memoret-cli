@@ -1,5 +1,7 @@
 import base64
 import os
+import re
+import socket
 
 import pytest
 
@@ -9,6 +11,7 @@ from memoret_cli.crypto import (
     fingerprint,
     generate_keypair,
     open_sealed,
+    receiver_host,
     seal,
 )
 
@@ -82,3 +85,20 @@ def test_fingerprint_is_sixteen_hex_chars_of_sha256():
     value = fingerprint(public_key)
     assert len(value) == 16
     assert all(c in "0123456789abcdef" for c in value)
+
+
+def test_receiver_host_does_not_borrow_the_machine_name():
+    """A sender falls back to <lan_hostname>.local exactly when discovery is
+    failing, so that name cannot be one the operating system may reassign."""
+    public_key, _ = generate_keypair()
+    host = receiver_host(public_key)
+    machine = socket.gethostname().removesuffix(".local")
+    assert machine not in host
+    assert host == f"memoret-{fingerprint(public_key)}"
+
+
+def test_receiver_host_is_a_legal_dns_label():
+    public_key, _ = generate_keypair()
+    host = receiver_host(public_key)
+    assert len(host) <= 63
+    assert re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?", host)
