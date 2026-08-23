@@ -6,7 +6,7 @@ import socket
 from dataclasses import dataclass
 from pathlib import Path
 
-from .crypto import generate_keypair
+from .crypto import generate_keypair, receiver_host
 
 CONFIG_DIR = Path.home() / ".memoret"
 CONFIG_PATH = CONFIG_DIR / "config.json"
@@ -28,14 +28,15 @@ class Config:
     def pairing_json(self) -> str:
         """Build the pairing payload the iOS app scans, matching the shape
         the Obsidian plugin emits."""
-        hostname = socket.gethostname().removesuffix(".local")
         return json.dumps(
             {
                 "pubkey": self.public_key,
                 "auth_token": self.auth_token,
-                "lan_hostname": hostname,
+                # The name this receiver publishes, not the machine's own,
+                # which can be reassigned underneath a saved pairing.
+                "lan_hostname": receiver_host(self.public_key),
                 "lan_port": self.port,
-                "label": f"CLI ({hostname})",
+                "label": f"CLI ({socket.gethostname().removesuffix('.local')})",
             }
         )
 

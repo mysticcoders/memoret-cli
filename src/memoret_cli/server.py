@@ -10,7 +10,7 @@ from zeroconf import ServiceInfo, Zeroconf
 
 from . import __version__
 from .config import Config
-from .crypto import MAGIC, fingerprint, open_sealed
+from .crypto import MAGIC, fingerprint, open_sealed, receiver_host
 from .ingest import PackageRejected, ingest_package
 from .manifest import CAPTURE_KINDS
 
@@ -207,6 +207,11 @@ class Receiver:
                 addresses=_local_addresses(),
                 port=self.config.port,
                 properties={},
+                # Without this, the address records are published under the
+                # service instance name, which is not a host name a sender
+                # can fall back to. Naming them here is what makes the
+                # lan_hostname in the pairing payload resolve.
+                server=f"{receiver_host(self.config.public_key)}.local.",
             )
             self.zeroconf.register_service(info)
             self.log(f"advertising {SERVICE_TYPE[:-7]} via mDNS")

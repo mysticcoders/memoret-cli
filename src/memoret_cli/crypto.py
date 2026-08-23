@@ -79,3 +79,18 @@ def fingerprint(public_key_b64: str) -> str:
     fingerprint the iOS app validates during discovery."""
     raw = base64.b64decode(public_key_b64)
     return hashlib.sha256(raw).hexdigest()[:16]
+
+
+def receiver_host(public_key_b64: str) -> str:
+    """The `.local` name this receiver answers to, without the suffix.
+
+    Deliberately not the machine's own hostname. A sender falls back to
+    `<lan_hostname>.local` when discovery fails — the one moment the address
+    has to be right — and a machine name can be reassigned underneath a
+    pairing that was saved months earlier. mDNS name conflicts do exactly
+    that on macOS, renaming the host to `<name>-2` and keeping it.
+
+    A name derived from the fingerprint is stable for the life of the
+    keypair, and this receiver publishes it itself.
+    """
+    return f"memoret-{fingerprint(public_key_b64)}"
